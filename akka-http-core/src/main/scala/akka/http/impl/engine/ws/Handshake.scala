@@ -155,6 +155,74 @@ private[http] object Handshake {
             UpgradeToWebSocketResponseHeader(handler)))
   }
 
+  object H2Server {
+
+    /**
+      *  Validates a client WebSocket handshake over HTTP/2. Returns either `Right(UpgradeToWebSocket)` or
+      *  `Left(MessageStartError)`.
+      *
+      *  From: http://httpwg.org/http-extensions/draft-ietf-httpbis-h2-websockets.html#using-extended-connect-to-bootstrap-the-websocket-protocol
+      *
+      *  1.   An HTTP/2.0 or higher CONNECT request, including a ":path"
+      *        pseudo-header [RFC7540] that should be interpreted as a /resource name/.
+      *
+      *   2.   An ":authority" header field containing the server's authority.
+      *
+      *   3.   A ":protocol" header field containing the value "websocket",
+      *        treated as an ASCII case-insensitive value.
+      *
+      *   4.   A |Sec-WebSocket-Version| header field, with a value of 13.
+      *
+      *   5.   Optionally, an |Origin| header field.  This header field is sent
+      *        by all browser clients.  A connection attempt lacking this
+      *        header field SHOULD NOT be interpreted as coming from a browser
+      *        client.
+      *
+      *   6.   Optionally, a |Sec-WebSocket-Protocol| header field, with a list
+      *        of values indicating which protocols the client would like to
+      *        speak, ordered by preference.
+      *
+      *   7.   Optionally, a |Sec-WebSocket-Extensions| header field, with a
+      *        list of values indicating which extensions the client would like
+      *        to speak.  The interpretation of this header field is discussed
+      *        in Section 9.1 of [RFC6455].
+      */
+    def websocketUpgrade(headers: List[HttpHeader], authority: Uri.Authority, protocol: UpgradeProtocol): OptionVal[UpgradeToWebSocket] = {
+      if (authority != null && protocol.name == "websocket") {
+        val protocol = HttpHeader.fastFind(classOf[`Sec-WebSocket-Protocol`], headers)
+
+        val clientSupportedSubprotocols = protocol match {
+          case OptionVal.Some(p) ⇒ p.protocols
+          case _                 ⇒ Nil
+        }
+
+        val header = new UpgradeToWebSocketLowLevel {
+          def requestedProtocols: Seq[String] = clientSupportedSubprotocols
+
+          def handle(handler: Either[Graph[FlowShape[FrameEvent, FrameEvent], Any], Graph[FlowShape[Message, Message], Any]], subprotocol: Option[String]): HttpResponse = {
+            require(
+              subprotocol.forall(chosen ⇒ clientSupportedSubprotocols.contains(chosen)),
+              s"Tried to choose invalid subprotocol '$subprotocol' which wasn't offered by the client: [${requestedProtocols.mkString(", ")}]")
+            buildResponse(handler, subprotocol)
+          }
+
+          def handleFrames(handlerFlow: Graph[FlowShape[FrameEvent, FrameEvent], Any], subprotocol: Option[String]): HttpResponse =
+            handle(Left(handlerFlow), subprotocol)
+
+          override def handleMessages(handlerFlow: Graph[FlowShape[Message, Message], Any], subprotocol: Option[String] = None): HttpResponse =
+            handle(Right(handlerFlow), subprotocol)
+        }
+        OptionVal.Some(header)
+      } else OptionVal.None
+    }
+
+    def buildResponse(handler: Either[Graph[FlowShape[FrameEvent, FrameEvent], Any], Graph[FlowShape[Message, Message], Any]], subprotocol: Option[String]): HttpResponse =
+      HttpResponse(
+        StatusCodes.OK,
+        subprotocol.map(p ⇒ `Sec-WebSocket-Protocol`(Seq(p))).toList :::
+          List(UpgradeToWebSocketResponseHeader(handler)))
+  }
+
   object Client {
     case class NegotiatedWebSocketSettings(subprotocol: Option[String])
 

@@ -29,6 +29,10 @@ trait Http2ServerSettings extends javadsl.settings.Http2ServerSettings { self: H
   def withIncomingStreamLevelBufferSize(newValue: Int): Http2ServerSettings =
     copy(incomingStreamLevelBufferSize = newValue)
 
+  def supportsExtendedConnect: Boolean
+  def withSupportsExtendedConnect(newValue: Boolean): Http2ServerSettings =
+    copy(supportsExtendedConnect = newValue)
+
   @InternalApi
   private[http] def internalSettings: Option[Http2InternalServerSettings]
   @InternalApi
@@ -45,6 +49,7 @@ object Http2ServerSettings extends SettingsCompanion[Http2ServerSettings] {
     requestEntityChunkSize:            Int,
     incomingConnectionLevelBufferSize: Int,
     incomingStreamLevelBufferSize:     Int,
+    supportsExtendedConnect:           Boolean,
     internalSettings:                  Option[Http2InternalServerSettings])
     extends Http2ServerSettings {
     require(requestEntityChunkSize > 0, "request-entity-chunk-size must be > 0")
@@ -57,6 +62,7 @@ object Http2ServerSettings extends SettingsCompanion[Http2ServerSettings] {
       requestEntityChunkSize = c getIntBytes "request-entity-chunk-size",
       incomingConnectionLevelBufferSize = c getIntBytes "incoming-connection-level-buffer-size",
       incomingStreamLevelBufferSize = c getIntBytes "incoming-stream-level-buffer-size",
+      supportsExtendedConnect = c getBoolean "supports-extended-connect",
       None // no possibility to configure internal settings with config
     )
   }

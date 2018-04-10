@@ -9,14 +9,15 @@ import java.lang.StringBuilder
 import akka.annotation.InternalApi
 import akka.http.impl.engine.parsing.HttpHeaderParser
 import akka.http.impl.engine.server.HttpAttributes
+import akka.http.impl.engine.ws.Handshake
 import akka.http.scaladsl.model
 import akka.http.scaladsl.model._
-import akka.http.scaladsl.model.headers.{ `Remote-Address`, `Tls-Session-Info` }
+import akka.http.scaladsl.model.headers._
 import akka.http.scaladsl.model.http2.Http2StreamIdHeader
 import akka.http.scaladsl.settings.ServerSettings
 import akka.stream.Attributes
 import akka.stream.scaladsl.Source
-import akka.util.ByteString
+import akka.util.{ByteString, OptionVal}
 
 import scala.annotation.tailrec
 import scala.collection.immutable.VectorBuilder
@@ -52,6 +53,7 @@ private[http2] object RequestParsing {
         contentLength:     Long                       = -1,
         cookies:           StringBuilder              = null,
         seenRegularHeader: Boolean                    = false,
+        protocol:          UpgradeProtocol            = null,
         headers:           VectorBuilder[HttpHeader]  = new VectorBuilder[HttpHeader]
       ): HttpRequest =
         if (remainingHeaders.isEmpty) {
@@ -80,19 +82,30 @@ private[http2] object RequestParsing {
           val (path, rawQueryString) = pathAndRawQuery
           val authorityOrDefault: Uri.Authority = if (authority == null) Uri.Authority.Empty else authority
           val uri = Uri(scheme, authorityOrDefault, path, rawQueryString)
+
+          val allHeaders0 = headers.result().toList
+          val allHeaders =
+            if (method == HttpMethods.CONNECT) {
+              Handshake.H2Server.websocketUpgrade(allHeaders0, authority, protocol) match {
+                case OptionVal.Some(upgrade) => upgrade :: allHeaders0
+                case OptionVal.None => allHeaders0
+              }
+            }
+            else headers.result()
+
           HttpRequest(
-            method, uri, headers.result(), entity, HttpProtocols.`HTTP/2.0`
+            method, uri, allHeaders, entity, HttpProtocols.`HTTP/2.0`
           )
         } else remainingHeaders.head match {
           case (":scheme", value) ⇒
             checkUniquePseudoHeader(":scheme", scheme)
             checkNoRegularHeadersBeforePseudoHeader(":scheme", seenRegularHeader)
-            rec(remainingHeaders.tail, method, value, authority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, headers)
+            rec(remainingHeaders.tail, method, value, authority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, protocol, headers)
           case (":method", value) ⇒
             checkUniquePseudoHeader(":method", method)
             checkNoRegularHeadersBeforePseudoHeader(":method", seenRegularHeader)
             val m = HttpMethods.getForKey(value).getOrElse(malformedRequest(s"Unknown HTTP method: '$value'"))
-            rec(remainingHeaders.tail, m, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, headers)
+            rec(remainingHeaders.tail, m, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, protocol, headers)
           case (":path", value) ⇒
             checkUniquePseudoHeader(":path", pathAndRawQuery)
             checkNoRegularHeadersBeforePseudoHeader(":path", seenRegularHeader)
@@ -101,7 +114,7 @@ private[http2] object RequestParsing {
             } catch {
               case IllegalUriException(info) ⇒ throw new ParsingException(info)
             }
-            rec(remainingHeaders.tail, method, scheme, authority, newPathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, headers)
+            rec(remainingHeaders.tail, method, scheme, authority, newPathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, protocol, headers)
           case (":authority", value) ⇒
             checkUniquePseudoHeader(":authority", authority)
             checkNoRegularHeadersBeforePseudoHeader(":authority", seenRegularHeader)
@@ -110,17 +123,22 @@ private[http2] object RequestParsing {
             } catch {
               case IllegalUriException(info) ⇒ throw new ParsingException(info)
             }
-            rec(remainingHeaders.tail, method, scheme, newAuthority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, headers)
+            rec(remainingHeaders.tail, method, scheme, newAuthority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, protocol, headers)
           case (":status", _) ⇒
             malformedRequest("Pseudo-header ':status' is for responses only; it cannot appear in a request")
+          case (":protocol", value) =>
+            checkUniquePseudoHeader(":protocol", protocol)
+            checkNoRegularHeadersBeforePseudoHeader(":protocol", seenRegularHeader)
+            checkProtocolPseudoHeader(method, value)
+            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, seenRegularHeader, UpgradeProtocol(value), headers)
 
           case ("content-type", ct) ⇒
             val contentType = ContentType.parse(ct).right.getOrElse(malformedRequest(s"Invalid content-type: '$ct'"))
-            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, headers)
+            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, protocol, headers)
 
           case ("content-length", length) ⇒
             val contentLength = length.toLong
-            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, headers)
+            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, protocol, headers)
 
           case ("cookie", value) ⇒
             // Compress cookie headers as described here https://tools.ietf.org/html/rfc7540#section-8.1.2.5
@@ -130,11 +148,11 @@ private[http2] object RequestParsing {
               cookies.append("; ") // Append octets as required by the spec
             }
             cookiesBuilder.append(value)
-            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookiesBuilder, true, headers)
+            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookiesBuilder, true, protocol, headers)
 
           case (name, value) ⇒
             val httpHeader = parseHeaderPair(httpHeaderParser, name, value)
-            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, headers += httpHeader)
+            rec(remainingHeaders.tail, method, scheme, authority, pathAndRawQuery, contentType, contentLength, cookies, true, protocol, headers += httpHeader)
         }
 
       rec(subStream.initialHeaders.keyValuePairs)
@@ -159,6 +177,8 @@ private[http2] object RequestParsing {
     if (value ne null) malformedRequest(s"Pseudo-header '$name' must not occur more than once")
   private def checkNoRegularHeadersBeforePseudoHeader(name: String, seenRegularHeader: Boolean): Unit =
     if (seenRegularHeader) malformedRequest(s"Pseudo-header field '$name' must not appear after a regular header")
+  private def checkProtocolPseudoHeader(method: HttpMethod, str: String): Unit =
+    if (method ne HttpMethods.CONNECT) malformedRequest("Pseudo-header ':protocol' may only be used with the CONNECT method")
   def malformedRequest(msg: String): Nothing =
     throw new RuntimeException(s"Malformed request: $msg")
 }

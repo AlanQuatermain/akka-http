@@ -16,6 +16,9 @@ trait Http2ServerSettings { self: scaladsl.settings.Http2ServerSettings ⇒
 
   def getIncomingStreamLevelBufferSize: Int = incomingStreamLevelBufferSize
   def withIncomingStreamLevelBufferSize(newIncomingStreamLevelBufferSize: Int): Http2ServerSettings
+
+  def getSupportsExtendedConnect: Boolean = supportsExtendedConnect
+  def withSupportsExtendedConnect(newSupportsExtendedConnect: Boolean): Http2ServerSettings
 }
 object Http2ServerSettings extends SettingsCompanion[Http2ServerSettings] {
   def create(config: Config): Http2ServerSettings = scaladsl.settings.Http2ServerSettings(config)

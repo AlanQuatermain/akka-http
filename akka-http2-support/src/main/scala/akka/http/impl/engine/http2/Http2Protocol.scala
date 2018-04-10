@@ -217,6 +217,32 @@ private[http] object Http2Protocol {
      */
     case object SETTINGS_MAX_HEADER_LIST_SIZE extends SettingIdentifier(0x6)
 
+    /**
+     * This is a placeholder because the All array requires contiguous numbers.
+     * It is very much not supported or implemented here.
+     *
+     * See http://httpwg.org/http-extensions/draft-ietf-httpbis-cache-digest.html
+     */
+    case object SETTINGS_ACCEPT_CACHE_DIGEST extends SettingIdentifier(0x7)
+
+    /**
+     * SETTINGS_ENABLE_CONNECT_PROTOCOL (0x8): HTTP/2 WebSockets
+     *    (draft-ietf-httpbis-h2-websockets) defines this setting, which
+     *    MUST be 0 or 1, to allow a server to indicate its conformance with
+     *    that standard.
+     *
+     *    Upon receipt of this setting with a value of 1 a client MAY use the
+     *    Extended CONNECT definition of that standard when creating new
+     *    streams. Receipt of this parameter by a server does not have any
+     *    impact.
+     *
+     *    A sender MUST NOT send a SETTINGS_ENABLE_CONNECT_PROTOCOL parameter
+     *    with the value of 0 after previously sending a value of 1.
+     *
+     *    See http://httpwg.org/http-extensions/draft-ietf-httpbis-h2-websockets.html
+     */
+    case object SETTINGS_ENABLE_CONNECT_PROTOCOL extends SettingIdentifier(0x8)
+
     val All =
       Array( // must start with id = 1 and don't have holes between ids
         SETTINGS_HEADER_TABLE_SIZE,
@@ -224,7 +250,9 @@ private[http] object Http2Protocol {
         SETTINGS_MAX_CONCURRENT_STREAMS,
         SETTINGS_INITIAL_WINDOW_SIZE,
         SETTINGS_MAX_FRAME_SIZE,
-        SETTINGS_MAX_HEADER_LIST_SIZE).toSeq
+        SETTINGS_MAX_HEADER_LIST_SIZE,
+        SETTINGS_ACCEPT_CACHE_DIGEST,
+        SETTINGS_ENABLE_CONNECT_PROTOCOL).toSeq
 
     // make sure that lookup works and `All` ordering isn't broken
     All.foreach(f ⇒ require(f == byId(f.id) && isKnownId(f.id), s"SettingIdentifier $f with id ${f.id} must be found"))

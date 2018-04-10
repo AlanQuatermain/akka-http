@@ -13,12 +13,12 @@ import akka.stream.BidiShape
 import akka.stream.Inlet
 import akka.stream.Outlet
 import akka.stream.impl.io.ByteStringParser.ParsingException
-import akka.stream.stage.{ GraphStage, GraphStageLogic, InHandler, StageLogging }
+import akka.stream.stage.{GraphStage, GraphStageLogic, InHandler, StageLogging}
 import akka.util.ByteString
 
 import scala.util.control.NonFatal
-
 import FrameEvent._
+import akka.http.impl.engine.http2.Http2Protocol.SettingIdentifier.SETTINGS_ENABLE_CONNECT_PROTOCOL
 
 /**
  * INTERNAL API
@@ -94,7 +94,11 @@ private[http2] class Http2ServerDemux(http2Settings: Http2ServerSettings) extend
         pull(frameIn)
         pull(substreamIn)
 
-        multiplexer.pushControlFrame(SettingsFrame(Nil)) // server side connection preface
+        val settingsFrame =
+          if (http2Settings.supportsExtendedConnect) SettingsFrame(SETTINGS_ENABLE_CONNECT_PROTOCOL -> 1 :: Nil)
+          else SettingsFrame(Nil)
+
+        multiplexer.pushControlFrame(settingsFrame) // server side connection preface
       }
 
       /**
